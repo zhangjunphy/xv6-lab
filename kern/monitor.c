@@ -64,8 +64,8 @@ mon_backtrace(int argc, char **argv, struct Trapframe *tf)
 
 int mon_printf(int argc, char **argv, struct Trapframe *tf)
 {
-	int x = 1, y = 3, z = 4;
-	cprintf("x %d, y %x, z %d\n", x, y, z);
+	unsigned int i = 0x00646c72;
+	cprintf("H%x Wo%s", 57616, &i);
 	return 0;
 }
 
