@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <fcntl.h>
@@ -38,6 +39,12 @@ struct pipecmd {
   struct cmd *right; // right side of pipe
 };
 
+struct subcmd {
+  int type;              // ;
+  struct cmd *first;     // first cmd
+  struct cmd *rest;      // all the rest
+};
+
 int fork1(void);  // Fork but exits on failure.
 struct cmd *parsecmd(char*);
 
@@ -49,6 +56,7 @@ runcmd(struct cmd *cmd)
   struct execcmd *ecmd;
   struct pipecmd *pcmd;
   struct redircmd *rcmd;
+  struct subcmd *scmd;
 
   if(cmd == 0)
     _exit(0);
@@ -63,55 +71,49 @@ runcmd(struct cmd *cmd)
     if(ecmd->argv[0] == 0)
       _exit(0);
     // Your code here ...
-    int ret = execvp(ecmd->argv[0], ecmd->argv);
-    if (ret == -1) {
-      fprintf(stderr, "error executing %s, errno: %d\n", ecmd->argv[0], errno);
-      _exit(-1);
-    }
+    r = execvp(ecmd->argv[0], ecmd->argv);
+    if (r < 0)
+      perror("execvp() failed");
     break;
 
   case '>':
   case '<':
     rcmd = (struct redircmd*)cmd;
     // Your code here ...
-    ret = close(rcmd->fd);
-    if (ret == -1) {
-      fprintf(stderr, "failed to close file %s, errno: %d\n", rcmd->file, errno);
-      _exit(-1);
-    }
+    r = close(rcmd->fd);
     int fd = open(rcmd->file, rcmd->flags);
-    fchmod(fd, 0644);
-    if (fd == -1) {
-      fprintf(stderr, "failed to open file %s, errno: %d\n", rcmd->file, errno);
-      _exit(-1);
-    }
-
+    if (fd < 0)
+      perror("open() failed");
+    r = fchmod(fd, 0644);
+    if (r < 0)
+      perror("fchmod() failed");
     runcmd(rcmd->cmd);
-
-
     break;
 
   case '|':
     pcmd = (struct pipecmd*)cmd;
     // Your code here ...
-    int pipe_fd[2];
-    ret = pipe(pipe_fd);
-    if (ret < 0) {
-      fprintf(stderr, "error creating pipe, errno: %d\n", errno);
-      _exit(-1);
-    }
+    r = pipe(p);
+    if (r < 0)
+      perror("pipe() failed");
     int pid = fork1();
     if (pid == 0) {
-      close(pipe_fd[0]);
+      close(p[0]);
       close(fileno(stdout));
-      dup(pipe_fd[1]);
+      dup(p[1]);
       runcmd(pcmd->left);
     } else {
-      close(pipe_fd[1]);
+      close(p[1]);
       close(fileno(stdin));
-      dup(pipe_fd[0]);
+      dup(p[0]);
       runcmd(pcmd->right);
     }
+    break;
+
+  case ';':
+    scmd = (struct subcmd*)cmd;
+    runcmd(scmd->first);
+    runcmd(scmd->rest);
     break;
   }
   _exit(0);
@@ -201,10 +203,23 @@ pipecmd(struct cmd *left, struct cmd *right)
   return (struct cmd*)cmd;
 }
 
+struct cmd*
+subcmd(struct cmd *first, struct cmd *rest) {
+  struct subcmd *cmd;
+
+  cmd = malloc(sizeof(*cmd));
+  memset(cmd, 0, sizeof(*cmd));
+  cmd->type = ';';
+  cmd->first = first;
+  cmd->rest = rest;
+
+  return (struct cmd*) cmd;
+}
+
 // Parsing
 
 char whitespace[] = " \t\r\n\v";
-char symbols[] = "<|>";
+char symbols[] = "<|>;";
 
 int
 gettoken(char **ps, char *es, char **q, char **eq)
@@ -223,6 +238,7 @@ gettoken(char **ps, char *es, char **q, char **eq)
     break;
   case '|':
   case '<':
+  case ';':
     s++;
     break;
   case '>':
@@ -258,6 +274,7 @@ peek(char **ps, char *es, char *toks)
 struct cmd *parseline(char**, char*);
 struct cmd *parsepipe(char**, char*);
 struct cmd *parseexec(char**, char*);
+struct cmd *parsesub(char**, char*);
 
 // make a copy of the characters in the input buffer, starting from s through es.
 // null-terminate the copy to make it a string.
@@ -292,7 +309,21 @@ struct cmd*
 parseline(char **ps, char *es)
 {
   struct cmd *cmd;
+  cmd = parsesub(ps, es);
+  return cmd;
+}
+
+struct cmd*
+parsesub(char **ps, char *es)
+{
+  struct cmd *cmd;
+
   cmd = parsepipe(ps, es);
+  if(peek(ps, es, ";")){
+    gettoken(ps, es, 0, 0);
+    cmd = subcmd(cmd, parsesub(ps, es));
+  }
+
   return cmd;
 }
 
@@ -302,6 +333,11 @@ parsepipe(char **ps, char *es)
   struct cmd *cmd;
 
   cmd = parseexec(ps, es);
+
+  if (peek(ps, es, ";")) {
+    return cmd;
+  }
+
   if(peek(ps, es, "|")){
     gettoken(ps, es, 0, 0);
     cmd = pipecmd(cmd, parsepipe(ps, es));
@@ -346,7 +382,7 @@ parseexec(char **ps, char *es)
 
   argc = 0;
   ret = parseredirs(ret, ps, es);
-  while(!peek(ps, es, "|")){
+  while(!peek(ps, es, "|;")){
     if((tok=gettoken(ps, es, &q, &eq)) == 0)
       break;
     if(tok != 'a') {
