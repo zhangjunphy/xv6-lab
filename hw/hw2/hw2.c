@@ -39,10 +39,15 @@ struct pipecmd {
   struct cmd *right; // right side of pipe
 };
 
-struct subcmd {
+struct listcmd {
   int type;              // ;
   struct cmd *first;     // first cmd
   struct cmd *rest;      // all the rest
+};
+
+struct subcmd {
+  int type;
+  struct cmd *sub;
 };
 
 int fork1(void);  // Fork but exits on failure.
@@ -56,7 +61,7 @@ runcmd(struct cmd *cmd)
   struct execcmd *ecmd;
   struct pipecmd *pcmd;
   struct redircmd *rcmd;
-  struct subcmd *scmd;
+  struct listcmd *lcmd;
 
   if(cmd == 0)
     _exit(0);
@@ -111,9 +116,12 @@ runcmd(struct cmd *cmd)
     break;
 
   case ';':
-    scmd = (struct subcmd*)cmd;
-    runcmd(scmd->first);
-    runcmd(scmd->rest);
+    lcmd = (struct listcmd*)cmd;
+    r = fork1();
+    if (r == 0)
+      runcmd(lcmd->first);
+    wait(&r);
+    runcmd(lcmd->rest);
     break;
   }
   _exit(0);
@@ -176,14 +184,14 @@ execcmd(void)
 }
 
 struct cmd*
-redircmd(struct cmd *subcmd, char *file, int type)
+redircmd(struct cmd *listcmd, char *file, int type)
 {
   struct redircmd *cmd;
 
   cmd = malloc(sizeof(*cmd));
   memset(cmd, 0, sizeof(*cmd));
   cmd->type = type;
-  cmd->cmd = subcmd;
+  cmd->cmd = listcmd;
   cmd->file = file;
   cmd->flags = (type == '<') ?  O_RDONLY : O_WRONLY|O_CREAT|O_TRUNC;
   cmd->fd = (type == '<') ? 0 : 1;
@@ -204,8 +212,8 @@ pipecmd(struct cmd *left, struct cmd *right)
 }
 
 struct cmd*
-subcmd(struct cmd *first, struct cmd *rest) {
-  struct subcmd *cmd;
+listcmd(struct cmd *first, struct cmd *rest) {
+  struct listcmd *cmd;
 
   cmd = malloc(sizeof(*cmd));
   memset(cmd, 0, sizeof(*cmd));
@@ -274,7 +282,7 @@ peek(char **ps, char *es, char *toks)
 struct cmd *parseline(char**, char*);
 struct cmd *parsepipe(char**, char*);
 struct cmd *parseexec(char**, char*);
-struct cmd *parsesub(char**, char*);
+struct cmd *parselist(char**, char*);
 
 // make a copy of the characters in the input buffer, starting from s through es.
 // null-terminate the copy to make it a string.
@@ -309,19 +317,19 @@ struct cmd*
 parseline(char **ps, char *es)
 {
   struct cmd *cmd;
-  cmd = parsesub(ps, es);
+  cmd = parselist(ps, es);
   return cmd;
 }
 
 struct cmd*
-parsesub(char **ps, char *es)
+parselist(char **ps, char *es)
 {
   struct cmd *cmd;
 
   cmd = parsepipe(ps, es);
   if(peek(ps, es, ";")){
     gettoken(ps, es, 0, 0);
-    cmd = subcmd(cmd, parsesub(ps, es));
+    cmd = listcmd(cmd, parselist(ps, es));
   }
 
   return cmd;
