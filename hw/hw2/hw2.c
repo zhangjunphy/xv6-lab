@@ -45,11 +45,6 @@ struct listcmd {
   struct cmd *rest;      // all the rest
 };
 
-struct subcmd {
-  int type;
-  struct cmd *sub;
-};
-
 int fork1(void);  // Fork but exits on failure.
 struct cmd *parsecmd(char*);
 
@@ -57,7 +52,7 @@ struct cmd *parsecmd(char*);
 void
 runcmd(struct cmd *cmd)
 {
-  int p[2], r;
+  int p[2], r, pid;
   struct execcmd *ecmd;
   struct pipecmd *pcmd;
   struct redircmd *rcmd;
@@ -101,8 +96,7 @@ runcmd(struct cmd *cmd)
     r = pipe(p);
     if (r < 0)
       perror("pipe() failed");
-    int pid = fork1();
-    if (pid == 0) {
+    if (fork1() == 0) {
       close(p[0]);
       close(fileno(stdout));
       dup(p[1]);
@@ -117,8 +111,7 @@ runcmd(struct cmd *cmd)
 
   case ';':
     lcmd = (struct listcmd*)cmd;
-    r = fork1();
-    if (r == 0)
+    if (fork1() == 0)
       runcmd(lcmd->first);
     wait(&r);
     runcmd(lcmd->rest);
@@ -227,7 +220,7 @@ listcmd(struct cmd *first, struct cmd *rest) {
 // Parsing
 
 char whitespace[] = " \t\r\n\v";
-char symbols[] = "<|>;";
+char symbols[] = "<|>;()";
 
 int
 gettoken(char **ps, char *es, char **q, char **eq)
@@ -247,6 +240,8 @@ gettoken(char **ps, char *es, char **q, char **eq)
   case '|':
   case '<':
   case ';':
+  case '(':
+  case ')':
     s++;
     break;
   case '>':
@@ -282,7 +277,6 @@ peek(char **ps, char *es, char *toks)
 struct cmd *parseline(char**, char*);
 struct cmd *parsepipe(char**, char*);
 struct cmd *parseexec(char**, char*);
-struct cmd *parselist(char**, char*);
 
 // make a copy of the characters in the input buffer, starting from s through es.
 // null-terminate the copy to make it a string.
@@ -317,21 +311,11 @@ struct cmd*
 parseline(char **ps, char *es)
 {
   struct cmd *cmd;
-  cmd = parselist(ps, es);
-  return cmd;
-}
-
-struct cmd*
-parselist(char **ps, char *es)
-{
-  struct cmd *cmd;
-
   cmd = parsepipe(ps, es);
-  if(peek(ps, es, ";")){
+  if (peek(ps, es, ";")) {
     gettoken(ps, es, 0, 0);
-    cmd = listcmd(cmd, parselist(ps, es));
+    cmd = listcmd(cmd, parseline(ps, es));
   }
-
   return cmd;
 }
 
@@ -341,10 +325,6 @@ parsepipe(char **ps, char *es)
   struct cmd *cmd;
 
   cmd = parseexec(ps, es);
-
-  if (peek(ps, es, ";")) {
-    return cmd;
-  }
 
   if(peek(ps, es, "|")){
     gettoken(ps, es, 0, 0);
@@ -378,6 +358,26 @@ parseredirs(struct cmd *cmd, char **ps, char *es)
 }
 
 struct cmd*
+parseblock(char **ps, char *es)
+{
+  struct cmd *cmd;
+  if(!peek(ps, es, "(")) {
+    fprintf(stderr, "syntax error - parseblock");
+    exit(-1);
+  }
+  gettoken(ps, es, 0, 0);
+  cmd = parseline(ps, es);
+  if(!peek(ps, es, ")")) {
+    fprintf(stderr, "syntax error - missing )");
+    exit(-1);
+  }
+  gettoken(ps, es, 0, 0);
+  cmd = parseredirs(cmd, ps, es);
+
+  return cmd;
+}
+
+struct cmd*
 parseexec(char **ps, char *es)
 {
   char *q, *eq;
@@ -388,9 +388,13 @@ parseexec(char **ps, char *es)
   ret = execcmd();
   cmd = (struct execcmd*)ret;
 
+  if (peek(ps, es, "(")) {
+    return parseblock(ps, es);
+  }
+
   argc = 0;
   ret = parseredirs(ret, ps, es);
-  while(!peek(ps, es, "|;")){
+  while(!peek(ps, es, "|;()")){
     if((tok=gettoken(ps, es, &q, &eq)) == 0)
       break;
     if(tok != 'a') {
