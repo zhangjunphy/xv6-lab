@@ -20,3 +20,7 @@
 *.out
 *.o
 .ccls*
+cscope.*
+.clang_complete
+
+__pycache__/
