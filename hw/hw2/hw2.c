@@ -17,7 +17,7 @@
 // All commands have at least a type. Have looked at the type, the code
 // typically casts the *cmd to some specific cmd type.
 struct cmd {
-  int type;          //  ' ' (exec), | (pipe), '<' or '>' for redirection
+  int type;          //  ' ' (exec), | (pipe), ';' (list), '<', '>' or '+' for redirection
 };
 
 struct execcmd {
@@ -41,6 +41,7 @@ struct pipecmd {
 
 struct listcmd {
   int type;              // ;
+  int back;
   struct cmd *first;     // first cmd
   struct cmd *rest;      // all the rest
 };
@@ -78,6 +79,7 @@ runcmd(struct cmd *cmd)
 
   case '>':
   case '<':
+  case '+':
     rcmd = (struct redircmd*)cmd;
     // Your code here ...
     r = close(rcmd->fd);
@@ -111,6 +113,8 @@ runcmd(struct cmd *cmd)
 
   case ';':
     lcmd = (struct listcmd*)cmd;
+    if (lcmd->back && fork1() != 0)
+      break;
     if (fork1() == 0)
       runcmd(lcmd->first);
     wait(&r);
@@ -186,7 +190,16 @@ redircmd(struct cmd *listcmd, char *file, int type)
   cmd->type = type;
   cmd->cmd = listcmd;
   cmd->file = file;
-  cmd->flags = (type == '<') ?  O_RDONLY : O_WRONLY|O_CREAT|O_TRUNC;
+  switch (type) {
+  case '<':
+    cmd->flags = O_RDONLY;
+    break;
+  case '>':
+    cmd->flags = O_WRONLY|O_CREAT|O_TRUNC;
+    break;
+  case '+':
+    cmd->flags = O_WRONLY|O_CREAT|O_APPEND;
+  }
   cmd->fd = (type == '<') ? 0 : 1;
   return (struct cmd*)cmd;
 }
@@ -205,7 +218,7 @@ pipecmd(struct cmd *left, struct cmd *right)
 }
 
 struct cmd*
-listcmd(struct cmd *first, struct cmd *rest) {
+listcmd(struct cmd *first, struct cmd *rest, int back) {
   struct listcmd *cmd;
 
   cmd = malloc(sizeof(*cmd));
@@ -213,6 +226,7 @@ listcmd(struct cmd *first, struct cmd *rest) {
   cmd->type = ';';
   cmd->first = first;
   cmd->rest = rest;
+  cmd->back = back;
 
   return (struct cmd*) cmd;
 }
@@ -242,9 +256,14 @@ gettoken(char **ps, char *es, char **q, char **eq)
   case ';':
   case '(':
   case ')':
+  case '&':
     s++;
     break;
   case '>':
+    if (s + 1 < es && *(s+1) == '>') {
+      ret = '+';
+      s++;
+    }
     s++;
     break;
   default:
@@ -312,9 +331,9 @@ parseline(char **ps, char *es)
 {
   struct cmd *cmd;
   cmd = parsepipe(ps, es);
-  if (peek(ps, es, ";")) {
-    gettoken(ps, es, 0, 0);
-    cmd = listcmd(cmd, parseline(ps, es));
+  if (peek(ps, es, ";") || peek(ps, es, "&")) {
+    int tok = gettoken(ps, es, 0, 0);
+    cmd = listcmd(cmd, parseline(ps, es), tok == '&');
   }
   return cmd;
 }
@@ -345,14 +364,7 @@ parseredirs(struct cmd *cmd, char **ps, char *es)
       fprintf(stderr, "missing file for redirection\n");
       exit(-1);
     }
-    switch(tok){
-    case '<':
-      cmd = redircmd(cmd, mkcopy(q, eq), '<');
-      break;
-    case '>':
-      cmd = redircmd(cmd, mkcopy(q, eq), '>');
-      break;
-    }
+    cmd = redircmd(cmd, mkcopy(q, eq), tok);
   }
   return cmd;
 }
