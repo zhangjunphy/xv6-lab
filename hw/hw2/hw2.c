@@ -115,19 +115,6 @@ runcmd(struct cmd *cmd)
 
   case ';':
     lcmd = (struct listcmd*)cmd;
-    if (lcmd->back) {
-      pid = fork1();
-      if (pid != 0) {
-	++backcount;
-	fprintf(stderr, "[%d] %ld\n", backcount, pid);
-      } else {
-	lcmd->back = 0;
-	runcmd((struct cmd *) lcmd);
-	fprintf(stderr, "[%d]+ Done", backcount);
-      }
-      break;
-    }
-
     pid = fork1();
     if (pid == 0) {
       runcmd(lcmd->first);
@@ -156,6 +143,7 @@ main(void)
 {
   static char buf[100];
   int fd, r;
+  long pid;
 
   // Read and run input commands.
   while(getcmd(buf, sizeof(buf)) >= 0){
@@ -166,16 +154,21 @@ main(void)
       if(chdir(buf+3) < 0)
 	fprintf(stderr, "cannot cd %s\n", buf+3);
       continue;
-    } else if (buf[0] == 'w' && buf[1] == 'a' && buf[2] == 'i' && buf[3] == 't') {
-      int stat;
-      for (;;) {
-	long pid = wait(&stat);
-	if (WIFEXITED(stat) || WIFSIGNALED(stat))
+    } else if (strncmp(buf, "wait", 4) == 0) {
+      while ( (pid = wait(NULL)) ) {
+	if (errno == ECHILD)
 	  break;
       }
     }
-    if(fork1() == 0)
-      runcmd(parsecmd(buf));
+
+    struct cmd* cmd = parsecmd(buf);
+    if (fork1() == 0)
+      runcmd(cmd);
+
+    if (cmd->type == ';' && ((struct listcmd *) cmd)->back) {
+      continue;
+    }
+
     wait(&r);
   }
   exit(0);
