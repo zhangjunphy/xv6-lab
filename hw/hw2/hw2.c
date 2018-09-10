@@ -54,6 +54,7 @@ void
 runcmd(struct cmd *cmd)
 {
   int p[2], r, pid;
+  int backcount = 0;
   struct execcmd *ecmd;
   struct pipecmd *pcmd;
   struct redircmd *rcmd;
@@ -113,11 +114,21 @@ runcmd(struct cmd *cmd)
 
   case ';':
     lcmd = (struct listcmd*)cmd;
-    if (lcmd->back && fork1() != 0)
-      break;
-    if (fork1() == 0)
-      runcmd(lcmd->first);
-    wait(&r);
+    if (lcmd->back) {
+      pid = fork1();
+      if (pid != 0) {
+	++backcount;
+	fprintf(stderr, "[%d] %d\n", backcount, pid);
+	break;
+      }
+      if (fork1() == 0) {
+	lcmd->back = 0;
+	runcmd((struct cmd *) lcmd);
+	fprintf(stderr, "[%d]+ Done", backcount);
+	break;
+      }
+    }
+    runcmd(lcmd->first);
     runcmd(lcmd->rest);
     break;
   }
@@ -234,7 +245,7 @@ listcmd(struct cmd *first, struct cmd *rest, int back) {
 // Parsing
 
 char whitespace[] = " \t\r\n\v";
-char symbols[] = "<|>;()";
+char symbols[] = "<|>;()&";
 
 int
 gettoken(char **ps, char *es, char **q, char **eq)
@@ -345,7 +356,7 @@ parsepipe(char **ps, char *es)
 
   cmd = parseexec(ps, es);
 
-  if(peek(ps, es, "|")){
+  if(peek(ps, es, "|")) {
     gettoken(ps, es, 0, 0);
     cmd = pipecmd(cmd, parsepipe(ps, es));
   }
@@ -358,7 +369,7 @@ parseredirs(struct cmd *cmd, char **ps, char *es)
   int tok;
   char *q, *eq;
 
-  while(peek(ps, es, "<>")){
+  while(peek(ps, es, "<>")) {
     tok = gettoken(ps, es, 0, 0);
     if(gettoken(ps, es, &q, &eq) != 'a') {
       fprintf(stderr, "missing file for redirection\n");
@@ -398,7 +409,7 @@ parseexec(char **ps, char *es)
   struct cmd *ret;
 
   ret = execcmd();
-  cmd = (struct execcmd*)ret;
+  cmd = (struct execcmd*) ret;
 
   if (peek(ps, es, "(")) {
     return parseblock(ps, es);
@@ -406,7 +417,7 @@ parseexec(char **ps, char *es)
 
   argc = 0;
   ret = parseredirs(ret, ps, es);
-  while(!peek(ps, es, "|;()")){
+  while(!peek(ps, es, "|;&()")) {
     if((tok=gettoken(ps, es, &q, &eq)) == 0)
       break;
     if(tok != 'a') {
