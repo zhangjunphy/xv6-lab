@@ -53,7 +53,8 @@ struct cmd *parsecmd(char*);
 void
 runcmd(struct cmd *cmd)
 {
-  int p[2], r, pid;
+  int p[2], r;
+  long pid;
   int backcount = 0;
   struct execcmd *ecmd;
   struct pipecmd *pcmd;
@@ -118,17 +119,21 @@ runcmd(struct cmd *cmd)
       pid = fork1();
       if (pid != 0) {
 	++backcount;
-	fprintf(stderr, "[%d] %d\n", backcount, pid);
-	break;
-      }
-      if (fork1() == 0) {
+	fprintf(stderr, "[%d] %ld\n", backcount, pid);
+      } else {
 	lcmd->back = 0;
 	runcmd((struct cmd *) lcmd);
 	fprintf(stderr, "[%d]+ Done", backcount);
-	break;
       }
+      break;
     }
-    runcmd(lcmd->first);
+
+    pid = fork1();
+    if (pid == 0) {
+      runcmd(lcmd->first);
+      break;
+    }
+    wait(&r);
     runcmd(lcmd->rest);
     break;
   }
@@ -161,6 +166,13 @@ main(void)
       if(chdir(buf+3) < 0)
 	fprintf(stderr, "cannot cd %s\n", buf+3);
       continue;
+    } else if (buf[0] == 'w' && buf[1] == 'a' && buf[2] == 'i' && buf[3] == 't') {
+      int stat;
+      for (;;) {
+	long pid = wait(&stat);
+	if (WIFEXITED(stat) || WIFSIGNALED(stat))
+	  break;
+      }
     }
     if(fork1() == 0)
       runcmd(parsecmd(buf));
